@@ -1,25 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, UserAction, ActionTemplate } from '../lib/supabase';
-import { TrendingDown, Flame, Award, Target, Globe, TrendingUp, Users, Zap, BarChart3, ArrowRight } from 'lucide-react';
+import { TrendingDown, Flame, Target, Globe, BarChart3 } from 'lucide-react';
 import { getUserTotal, getGlobalTotal } from '../services/simpleEmissionLogging';
-import { 
-  getUserStatistics,
-  getUserStatsSummary,
-  getGlobalStatistics, 
-  getLeaderboardEntries,
-  getRecentActionLogs,
-  kgToLbs 
-} from '../services/climateStats';
 import { TREE_EQUIVALENT_LBS_PER_TREE } from '../constants/emissionFactors';
+
+const kgToLbs = (kg: number): number => kg * 2.20462;
 
 export default function Dashboard() {
   const { profile } = useAuth();
   const [actions, setActions] = useState<UserAction[]>([]);
   const [loading, setLoading] = useState(true);
-  const [userStats, setUserStats] = useState<any>(null);
-  const [globalStats, setGlobalStats] = useState<any>(null);
-  const [userRank, setUserRank] = useState<number | null>(null);
   const [stats, setStats] = useState({
     totalEmissionsSaved: 0,
     actionsThisMonth: 0,
@@ -69,12 +60,9 @@ export default function Dashboard() {
     if (!profile) return;
 
     try {
-      // Load comprehensive statistics using new service
-      // Try production schema first (includes ranks), fallback to previous schema
-      const [userStatsSummary, userStatistics, globalStatistics, actionsResult, leaderboard] = await Promise.all([
-        getUserStatsSummary(profile.id), // Production schema with ranks
-        getUserStatistics(profile.id), // Previous/legacy schema
-        getGlobalStatistics(),
+      const [userTotal, globalTotal, actionsResult] = await Promise.all([
+        getUserTotal(profile.id),
+        getGlobalTotal(),
         supabase
           .from('user_actions')
           .select(`
@@ -84,56 +72,12 @@ export default function Dashboard() {
           .eq('user_id', profile.id)
           .order('logged_at', { ascending: false })
           .limit(10),
-        getLeaderboardEntries('all_time', 'global', undefined, 1000),
       ]);
 
       const { data: actionsData } = actionsResult;
 
-      // Use production schema if available (has ranks), otherwise use previous schema
-      const statsToUse = userStatsSummary || userStatistics;
-      setUserStats(statsToUse);
-      setGlobalStats(globalStatistics);
-
-      // Get user's rank from production schema if available, otherwise calculate from leaderboard
-      if (userStatsSummary?.rank_global) {
-        setUserRank(userStatsSummary.rank_global);
-      } else if (leaderboard && statsToUse) {
-        const rankIndex = leaderboard.findIndex(
-          (entry) => entry.user_id === profile.id
-        );
-        setUserRank(rankIndex >= 0 ? rankIndex + 1 : null);
-      }
-
-      // Convert kg to lbs for display
-      // Support both production schema (current_month_co2) and previous schema (current_month_co2_saved)
-      const totalCo2Lbs = statsToUse 
-        ? kgToLbs(statsToUse.total_co2_saved_kg)
-        : 0;
-      const monthlyCo2Lbs = statsToUse
-        ? kgToLbs((statsToUse as any).current_month_co2 || (statsToUse as any).current_month_co2_saved || 0)
-        : 0;
-      const yearlyCo2Lbs = statsToUse
-        ? kgToLbs((statsToUse as any).current_year_co2 || (statsToUse as any).current_year_co2_saved || 0)
-        : 0;
-      // Always fetch global total from simpleEmissionLogging service
-      // This ensures all users see the same global total
-      // Formula: SUM(user_stats.total_lbs) = global_emissions.total_lbs
-      const [userTotal, globalTotal] = await Promise.all([
-        getUserTotal(profile.id),
-        getGlobalTotal(),
-      ]);
-
-      // Always use simple global total to ensure consistency across all users
-      // All users should see the same global total: SUM(user_stats.total_lbs)
-      const globalTotalLbs = globalTotal;
-
-      // Use user statistics if available, otherwise use simple user total
-      const fallbackTotal = totalCo2Lbs || userTotal;
-      const fallbackGlobal = globalTotal;
-
       if (actionsData) {
         setActions(actionsData);
-
         const thisMonth = new Date();
         thisMonth.setDate(1);
         thisMonth.setHours(0, 0, 0, 0);
@@ -143,25 +87,33 @@ export default function Dashboard() {
         );
 
         setStats({
-          totalEmissionsSaved: totalCo2Lbs || fallbackTotal,
-          actionsThisMonth: (statsToUse as any)?.total_actions || (statsToUse as any)?.total_actions_count || monthActions.length,
-          currentStreak: statsToUse?.streak_days || profile.current_streak,
-          globalTotalLbs: globalTotalLbs || fallbackGlobal,
-          monthlyCo2Kg: (statsToUse as any)?.current_month_co2 || (statsToUse as any)?.current_month_co2_saved || 0,
-          yearlyCo2Kg: (statsToUse as any)?.current_year_co2 || (statsToUse as any)?.current_year_co2_saved || 0,
+          totalEmissionsSaved: userTotal,
+          actionsThisMonth: monthActions.length,
+          currentStreak: profile.current_streak,
+          globalTotalLbs: globalTotal,
+          monthlyCo2Kg: (monthActions.reduce((sum, a) => sum + (a.custom_emissions_saved || 0), 0)) * 0.453592,
+          yearlyCo2Kg: userTotal * 0.453592,
         });
       } else {
         setStats({
-          totalEmissionsSaved: totalCo2Lbs || fallbackTotal,
-          actionsThisMonth: (statsToUse as any)?.total_actions || (statsToUse as any)?.total_actions_count || 0,
-          currentStreak: statsToUse?.streak_days || profile.current_streak,
-          globalTotalLbs: globalTotalLbs || fallbackGlobal,
-          monthlyCo2Kg: (statsToUse as any)?.current_month_co2 || (statsToUse as any)?.current_month_co2_saved || 0,
-          yearlyCo2Kg: (statsToUse as any)?.current_year_co2 || (statsToUse as any)?.current_year_co2_saved || 0,
+          totalEmissionsSaved: userTotal,
+          actionsThisMonth: 0,
+          currentStreak: profile.current_streak,
+          globalTotalLbs: globalTotal,
+          monthlyCo2Kg: 0,
+          yearlyCo2Kg: userTotal * 0.453592,
         });
       }
     } catch (error) {
       console.error('Error loading dashboard data:', error);
+      setStats({
+        totalEmissionsSaved: 0,
+        actionsThisMonth: 0,
+        currentStreak: profile.current_streak,
+        globalTotalLbs: 0,
+        monthlyCo2Kg: 0,
+        yearlyCo2Kg: 0,
+      });
     } finally {
       setLoading(false);
     }
@@ -199,14 +151,8 @@ export default function Dashboard() {
               {stats.totalEmissionsSaved.toFixed(1)} lbs
             </div>
             <p className="text-emerald-100 text-sm">
-              {userStats ? `${userStats.total_co2_saved_kg.toFixed(2)} kg CO₂` : 'CO₂ saved'}
+              {(stats.yearlyCo2Kg).toFixed(2)} kg CO₂ saved
             </p>
-            {userRank && (
-              <p className="text-emerald-100 text-xs mt-2">
-                <Award className="w-3 h-3 inline mr-1" />
-                Rank #{userRank} globally
-              </p>
-            )}
           </div>
         </div>
 
@@ -222,11 +168,6 @@ export default function Dashboard() {
               {stats.currentStreak}
             </div>
             <p className="text-teal-100 text-sm">days in a row</p>
-            {userStats?.last_action_date && (
-              <p className="text-teal-100 text-xs mt-2">
-                Last action: {new Date(userStats.last_action_date).toLocaleDateString()}
-              </p>
-            )}
           </div>
         </div>
 
@@ -274,7 +215,7 @@ export default function Dashboard() {
       </div>
 
       {/* Global Community Impact Card */}
-      {globalStats && stats.globalTotalLbs > 0 && (
+      {stats.globalTotalLbs > 0 && (
         <div className="bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-600 rounded-xl shadow-lg p-6 text-white">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="flex items-center gap-4">
@@ -283,25 +224,21 @@ export default function Dashboard() {
               </div>
               <div>
                 <h2 className="text-lg font-semibold mb-1">Global Impact</h2>
-                <p className="text-emerald-100 text-sm">
-                  {globalStats.total_users.toLocaleString()} active users
-                </p>
+                <p className="text-emerald-100 text-sm">Community efforts</p>
               </div>
             </div>
             <div className="text-center md:text-left">
               <div className="text-3xl font-bold mb-1">
                 {stats.globalTotalLbs.toLocaleString(undefined, { maximumFractionDigits: 0 })} lbs
               </div>
-              <p className="text-emerald-100 text-sm">
-                {globalStats.total_co2_saved_kg.toLocaleString(undefined, { maximumFractionDigits: 0 })} kg CO₂ saved
-              </p>
+              <p className="text-emerald-100 text-sm">CO₂ saved globally</p>
               <p className="text-emerald-100 text-xs mt-1">
                 {Math.floor(stats.globalTotalLbs / TREE_EQUIVALENT_LBS_PER_TREE).toLocaleString()} trees equivalent
               </p>
             </div>
             <div className="text-center md:text-right">
               <div className="text-2xl font-bold mb-1">
-                {((stats.totalEmissionsSaved / stats.globalTotalLbs) * 100).toFixed(2)}%
+                {stats.globalTotalLbs > 0 ? ((stats.totalEmissionsSaved / stats.globalTotalLbs) * 100).toFixed(2) : '0'}%
               </div>
               <p className="text-emerald-100 text-sm">Your contribution</p>
               <p className="text-emerald-100 text-xs mt-1">
@@ -309,23 +246,9 @@ export default function Dashboard() {
               </p>
             </div>
           </div>
-          {globalStats.total_actions_count > 0 && (
-            <div className="mt-4 pt-4 border-t border-white/20 flex items-center justify-between text-sm">
-              <div className="flex items-center gap-2">
-                <Zap className="w-4 h-4" />
-                <span>{globalStats.total_actions_count.toLocaleString()} total actions</span>
-              </div>
-              {globalStats.countries_count > 0 && (
-                <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4" />
-                  <span>{globalStats.countries_count} countries</span>
-                </div>
-              )}
-            </div>
-          )}
           <div className="mt-4 pt-4 border-t border-white/20">
             <p className="text-emerald-100 text-sm text-center">
-              💡 See detailed global statistics, leaderboards, and live activity feed on the <strong>Global Impact</strong> page
+              See detailed global statistics and leaderboards on the Global Impact page
             </p>
           </div>
         </div>

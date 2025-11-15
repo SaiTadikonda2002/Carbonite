@@ -90,6 +90,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         id: data.user.id,
         full_name: fullName,
         username: email.split('@')[0],
+        household_size: 1,
+        baseline_emissions: 0,
+        monthly_goal: 0,
+        total_points: 0,
+        level: 1,
+        current_streak: 0,
+        longest_streak: 0,
       });
 
       if (profileError) throw profileError;

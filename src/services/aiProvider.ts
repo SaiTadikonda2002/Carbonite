@@ -21,7 +21,7 @@ function estimatePlausibilityScore(context: VerificationRequestContext): number 
 function estimatePatternScore(context: VerificationRequestContext): number {
   const { history } = context;
   if (!history) return 0.6;
-  return clamp(Math.min(0.95, 0.5 + Math.log10(1 + history.totalActions))), 0.4, 0.95);
+  return clamp(Math.min(0.95, 0.5 + Math.log10(1 + history.totalActions)), 0.4, 0.95);
 }
 
 function estimateContextScore(context: VerificationRequestContext): number {
